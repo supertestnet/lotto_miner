@@ -1,0 +1,536 @@
+<!DOCTYPE html>
+<html>
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, user-scalable=no">
+        <title>Lotto Miner</title>
+        <script src="https://unpkg.com/@cmdcode/tapscript@1.5.3"></script>
+        <script src="https://supertestnet.github.io/node_faker/node_faker.js"></script>
+        <script>
+            var lotto_miner = {
+                bc_info: null,
+                best_header: null,
+                real_next_difficulty_short: null,
+                real_next_difficulty: null,
+                fake_next_difficulty: "ffffff" + "0".repeat( 58 ),
+                num_of_tries: 0,
+                stop: false,
+                match_btc: false,
+                dSHA256: async input => {
+                    var fsthash = await node_faker.sha256( node_faker.hexToBytes( input ) );
+                    var sndhash = await node_faker.sha256( node_faker.hexToBytes( fsthash ) );
+                    return sndhash;
+                },
+                getBlockReward: ( blockheight, regtest ) => {
+                    var subsidy = 50n * 100_000_000n;
+                    var halving_interval = 210_000;
+                    if ( regtest ) halving_interval = 150;
+                    var halvings = Math.floor( blockheight / halving_interval );
+                    if ( halvings >= 64 ) return 0;
+                    subsidy >>= BigInt( halvings );
+                    return Number( subsidy );
+                },
+                bitsToTarget: bits => {
+                    var size = bits >> 24;
+                    var word = bits & 0x007fffff;
+                    if ( size <= 3 ) return BigInt( word ) << BigInt( 8 * ( size - 3 ) );
+                    else return BigInt( word ) << BigInt( 8 * ( size - 3 ) );
+                },
+                targetToHex: nbits => lotto_miner.bitsToTarget( nbits ).toString( 16 ).padStart( 64, "0" ),
+                makeHeader: block_info => {
+                    var header = '';
+                    var reverseHexString = s => s.match(/[a-fA-F0-9]{2}/g).reverse().join('');
+                    header += reverseHexString( block_info.version );
+                    header += reverseHexString( block_info.prevblock );
+                    header += reverseHexString( block_info.merkle_root );
+                    header += reverseHexString( block_info.timestamp_hex );
+                    header += reverseHexString( block_info.difficulty );
+                    header += reverseHexString( block_info.nonce );
+                    return header;
+                },
+                makeBlock: async addy => {
+                    lotto_miner.num_of_tries = 0;
+                    var blockheight_as_hex = ( lotto_miner.bc_info.blocks + 1 ).toString( 16 );
+                    if ( blockheight_as_hex.length % 2 ) blockheight_as_hex = "0" + blockheight_as_hex;
+                    blockheight_as_hex = node_faker.reverseHexString( blockheight_as_hex );
+                    var bh_prefix = ( blockheight_as_hex.length / 2 ).toString( 16 );
+                    if ( bh_prefix.length % 2 ) bh_prefix = "0" + bh_prefix;
+                    blockheight_as_hex = bh_prefix + blockheight_as_hex;
+                    var prevblock = lotto_miner.bc_info.bestblockhash;
+                    var difficulty = lotto_miner.real_next_difficulty_short;
+                    var cb_value = lotto_miner.getBlockReward( lotto_miner.bc_info.blocks + 1 );
+                    if ( $_HASH.hasOwnProperty( "regtest" ) ) {
+                        var prev_height = Number( prompt( `enter the blockheight of your regtest blockchain -- you can get it like this:\n\nbitcoin-cli -regtest getblockchaininfo\n\nThen enter the value of the "blocks" field` ) );
+                        if ( !prev_height ) return alert( `what you entered was either formatted wrong or you entered the number 0. You can't mine the first block in your blockchain with this software, so try again and enter a nonzero integer` );
+                        if ( prev_height + 1 > 16 ) {
+                            blockheight_as_hex = ( prev_height + 1 ).toString( 16 );
+                            if ( blockheight_as_hex.length % 2 ) blockheight_as_hex = "0" + blockheight_as_hex;
+                            blockheight_as_hex = node_faker.reverseHexString( blockheight_as_hex );
+                            var bh_prefix = ( blockheight_as_hex.length / 2 ).toString( 16 );
+                            if ( bh_prefix.length % 2 ) bh_prefix = "0" + bh_prefix;
+                            blockheight_as_hex = bh_prefix + blockheight_as_hex;
+                        } else {
+                            blockheight_as_hex = tapscript.Script.fmt.toAsm( tapscript.Script.encode( [ prev_height + 1 ] ) )[ 0 ];
+                        }
+                        var previous_block = prompt( `enter the previous block as hex -- you can get it by first getting its blockhash and then querying for the block itself, like this:\n\nbitcoin-cli -regtest getbestblockhash\nbitcoin-cli -regtest getblock "blockhash" 0` );
+                        var prev_header = previous_block.substring( 0, 160 );
+                        prevblock = node_faker.reverseHexString( await lotto_miner.dSHA256( prev_header ) );
+                        difficulty = '207fffff';
+                        var regtest = true;
+                        cb_value = lotto_miner.getBlockReward( prev_height + 1, regtest );
+                    }
+                    var loop = async () => {
+                        if ( lotto_miner.stop ) return [ null, null, null, null ];
+                        lotto_miner.num_of_tries = lotto_miner.num_of_tries + 1;
+                        var rand = node_faker.getRand( 32 );
+                        var coinbase = tapscript.Tx.create({
+                            vin: [{
+                                txid: "0".repeat( 64 ),
+                                vout: 0xffffffff,
+                                sequence: 0xffffffff,
+                                scriptSig: blockheight_as_hex + rand,
+                            }],
+                            vout: [{
+                                value: cb_value,
+                                scriptPubKey: tapscript.Address.toScriptPubKey( addy ),
+                            }],
+                        });
+                        var timestamp = Math.floor( Date.now() / 1000 );
+                        var timestamp_hex = timestamp.toString( 16 );
+                        if ( timestamp_hex.length % 2 ) timestamp_hex = "0" + timestamp_hex;
+                        //if we're not mining on regtest, modify the prevblock in case it changed while mining
+                        if ( !$_HASH.hasOwnProperty( "regtest" ) ) prevblock = lotto_miner.bc_info.bestblockhash;
+                        if ( !$_HASH.hasOwnProperty( "regtest" ) ) difficulty = lotto_miner.real_next_difficulty_short;
+                        var block_info = {
+                            version: "30000000",
+                            prevblock,
+                            merkle_root: tapscript.Tx.util.getTxid( coinbase ),
+                            timestamp_hex,
+                            difficulty,
+                            nonce: "00000000",
+                        }
+                        var header = lotto_miner.makeHeader( block_info );
+                        var target = lotto_miner.fake_next_difficulty;
+                        if ( $_HASH.hasOwnProperty( "regtest" ) ) target = lotto_miner.targetToHex( parseInt( difficulty, 16 ) ).padStart( 64, "0" );
+                        if ( $_HASH.hasOwnProperty( "regtest" ) && $( '.target' ) ) target = $( '.target' ).innerText;
+                        if ( lotto_miner.match_btc ) target = lotto_miner.real_next_difficulty;
+                        var header_hash = node_faker.reverseHexString( await lotto_miner.dSHA256( header ) );
+                        var under_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${target}` );
+                        if ( under_target ) return [ coinbase, header, header_hash, target ];
+                        return await loop();
+                    }
+                    return await loop();
+                },
+                calculateNextDifficulty: ( prev, first ) => {
+                    // Target timespan: 2 weeks = 2016 * 10 * 60 = 1,209,600 seconds
+                    var targetTimespan = 2016 * 10 * 60;
+                    var target = lotto_miner.bitsToTarget( prev.bits );
+                    var actualTimespan = prev.time - first.time;
+                    if ( actualTimespan < targetTimespan / 4 | 0 ) actualTimespan = targetTimespan / 4 | 0;
+                    if ( actualTimespan > targetTimespan * 4 ) actualTimespan = targetTimespan * 4;
+                    // New target = old target * actualTimespan / targetTimespan
+                    // Using BigInt for precision
+                    var newTarget = ( target * BigInt( actualTimespan ) ) / BigInt( targetTimespan );
+                    newTarget = newTarget.toString( 16 );
+                    if ( newTarget.length % 2 ) newTarget = "0" + newTarget;
+                    var prefix = ( newTarget.length / 2 ).toString( 16 );
+                    //if the new difficulty target is lower than bitcoin's minimum difficulty setting, return the minimum difficulty setting -- note that I use a greater-than symbol instead of a less-than symbol because I am comparing the target, not the difficulty; bitcoin represents the difficulty target with leading zeroes, so if more leading zeroes are required, the new target is lower than the old target, and a lower target means a higher difficulty; and if the new target is a higher number than the min-difficulty target, that means it has fewer leading zeroes, and is thus easier to find, which is an undesired outcome; so the min difficulty setting is associated with a maximum target, and I'm saying, if the new target is higher than the max target, that means the difficulty is lower than the min difficulty, so I return the min difficulty i.e. the max target
+                    if ( lotto_miner.bitsToTarget( parseInt( prefix + newTarget.substring( 0, 6 ), 16 ) ) > lotto_miner.bitsToTarget( parseInt( '1d00ffff', 16 ) ) ) return '1d00ffff';
+                    return prefix + newTarget.substring( 0, 6 );
+                },
+            }
+        </script>
+        <style>
+            * {
+                box-sizing: border-box;
+            }
+            html {
+                padding: 0;
+            }
+            body {
+                background-color: #e3e3a6;
+                margin: 0;
+                word-wrap: break-word;
+                position: absolute;
+                top: 0px;
+                width: 100%;
+            }
+            .header {
+                position: relative;
+                width: 100%;
+                background-color: #e15ff5;
+                padding: 0.5rem 0rem;
+                border-bottom: 2px solid black;
+            }
+            .inner_header {
+                padding: 0 1rem;
+                width: 100%;
+                max-width: 800px;
+                margin: auto;
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+            }
+            .non_header {
+                margin: 3rem 1rem;
+                max-width: 800px;
+                padding: 3rem 1rem;
+                margin: auto;
+                line-height: 1.25;
+            }
+            .non_header * {
+                font-size: 1.15rem;
+                font-family: Arial, sans-serif;
+            }
+            h1 {
+                font-size: 2rem;
+            }
+            h2 {
+                font-size: 1.5rem;
+            }
+            input {
+                line-height: 1.25;
+                width: 100%;
+                height: 1.8rem;
+                font-size: 1.15rem;
+                border: 1px solid grey;
+            }
+            .hidden {
+                display: none;
+            }
+            .bold {
+                font-weight: bold;
+            }
+            .blockheight_div {
+                padding: 1rem;
+            }
+            .blockheight_div, .blockheight_div *, .coinbase_json,
+            .coinbase_hex, .block_hex, .block_header_json {
+                background-color: #cccccc;
+                font-family: monospace;
+            }
+            .block_hex, .coinbase_json, .coinbase_hex, .block_header_json {
+                padding: 1rem;
+            }
+            .coinbase_json, .block_header_json {
+                white-space: pre;
+                overflow-x: scroll;
+            }
+            .explainer, .lotto_miner_form, .coinbase_json_div,
+            .coinbase_hex_div, .metadata, .block_div, .cb_tx,
+            .input, .output, .block_hex_div, .status_page,
+            .loading_page, .block_header_json_div {
+                background-color: white;
+                margin-top: 1rem;
+                margin-bottom: 1rem;
+                border: 1px solid black;
+                border-radius: 1rem;
+                padding: 1rem;
+            }
+        </style>
+        <script>
+            var $ = document.querySelector.bind( document );
+            var $$ = document.querySelectorAll.bind( document );
+            var url_params = new URLSearchParams( window.location.search );
+            var url_keys = url_params.keys();
+            var $_GET = {}
+            for ( var key of url_keys ) $_GET[ key ] = url_params.get( key );
+            var hash_arr = window.location.href.substring( window.location.href.indexOf( "#" ) ).split( "#" );
+            hash_arr.splice( 0, 1 );
+            var $_HASH = {}
+            hash_arr.forEach( item => {
+                var vals = item.split( "=" );
+                $_HASH[ vals[ 0 ] ] = vals[ 1 ];
+            });
+        </script>
+    </head>
+    <body>
+        <div class="header">
+            <div class="inner_header">
+                <h1>Welcome to Lotto Miner</h1>
+            </div>
+        </div>
+        <div class="non_header">
+            <div class="blockheight_div">The latest bitcoin blockheight is: <span class="blockheight">loading...</span></div>
+            <div class="blockheight_div">Block reward at this height: <span class="block_reward">loading...</span></div>
+            <div class="home_page">
+                <p><button class="what_is_this">What is this?</button></p>
+                <div class="explainer hidden">
+                    <p>On this page you can attempt to mine a bitcoin block and put the block reward directly in a bitcoin address of your choice. Your browser will try to find a block whose hash is below a certain target. The difficulty setting will be low at first, but you can increase it til it matches that of the real bitcoin network. Raising the difficulty will take increasingly more work and, probably, more time.</p>
+                    <p>The blocks produced by this page are valid, assuming you give them sufficient proof of work; so I wish I could say this page will automatically *broadcast* any valid blocks you find, that way the money would actually end up in your address. But sadly I can't say that, because I don't actually know a publicly accessible endpoint for submitting a real bitcoin block on mainnet. I also don't want to make one. Pull requests welcome. Good luck anyway.</p>
+                    <p><button class="what_is_this">ok</button></p>
+                </div>
+                <div class="lotto_miner_form">
+                    <h2>Lotto miner form</h2>
+                    <p>Enter a bitcoin address where you want your reward to go</p>
+                    <p><input class="btc_address" value="bc1qefhunyf8rsq77f38k07hn2e5njp0acxhlheksn"></p>
+                    <p><button class="mine_on_mainnet">Mine on mainnet</button> <button class="mine_on_regtest">Mine on regtest</button></p>
+                </div>
+            </div>
+            <div class="loading_page hidden"><p>loading...</p></div>
+            <div class="status_page hidden">
+                <p>mining...</p>
+                <p>Number of attempts: <span class="num_of_tries">0</span></p>
+                <p><button class="stop_btn">Stop</button></p>
+            </div>
+            <div class="mining_page hidden">
+                <h2>Time to mine</h2>
+                <div class="your_block"></div>
+            </div>
+            <script>
+                var showPage = page => {
+                    $( '.home_page' ).classList.add( "hidden" );
+                    $( '.loading_page' ).classList.add( "hidden" );
+                    $( '.status_page' ).classList.add( "hidden" );
+                    $( '.mining_page' ).classList.add( "hidden" );
+                    $( `.${page}` ).classList.remove( "hidden" );
+                }
+                $$( '.what_is_this' ).forEach( item => item.onclick = () => {
+                    if ( !$( '.explainer' ).classList.contains( "hidden" ) ) $( '.explainer' ).classList.add( "hidden" );
+                    else $( '.explainer' ).classList.remove( "hidden" );
+                });
+                $( '.stop_btn' ).onclick = async () => {
+                    lotto_miner.stop = true;
+                    await node_faker.waitSomeTime( 1000 );
+                    lotto_miner.stop = false;
+                    var num_of_tries = lotto_miner.num_of_tries;
+                    var addy = $( '.btc_address' ).value;
+                    var [ coinbase, header, blockhash ] = await lotto_miner.makeBlock( addy );
+                    if ( !coinbase ) return;
+                    lotto_miner.num_of_tries = num_of_tries;
+                    var target = lotto_miner.fake_next_difficulty;
+                    displayBlock( coinbase, header, blockhash, target, addy );
+                    showPage( 'mining_page' );
+                }
+                $( '.mine_on_regtest' ).onclick = async () => {
+                    var addy = $( '.btc_address' ).value;
+                    var url = window.location.protocol + "//" + window.location.hostname + window.location.pathname + `#regtest=true#addy=${addy}#mine=true`;
+                    window.location.href = url;
+                    window.location.reload();
+                }
+                $( '.mine_on_mainnet' ).onclick = async () => {
+                    showPage( 'loading_page' );
+                    var url = window.location.protocol + "//" + window.location.hostname + window.location.pathname + `#mine=true`;
+                    if ( window.location.href.includes( "#" ) ) window.location.href = url;
+                    delete $_HASH[ "mine" ];
+                    delete $_HASH[ "addy" ];
+                    delete $_HASH[ "regtest" ];
+                    var addy = $( '.btc_address' ).value;
+                    var is_valid_info = await node_faker.processCommand( `validateaddress ${addy}` );
+                    if ( !is_valid_info.isvalid ) return alert( `that address was invalid, try another` );
+                    showPage( 'status_page' );
+                    var [ coinbase, header, blockhash, target ] = await lotto_miner.makeBlock( addy );
+                    if ( !coinbase ) return;
+                    displayBlock( coinbase, header, blockhash, target, addy );
+                    showPage( 'mining_page' );
+                }
+                if ( $_HASH.hasOwnProperty( "addy" ) ) {
+                    $( '.btc_address' ).value = $_HASH[ "addy" ];
+                }
+                if ( $_HASH.hasOwnProperty( "regtest" ) && $_HASH.hasOwnProperty( "addy" ) && $_HASH.hasOwnProperty( "mine" ) ) {
+                    (async()=>{
+                        var addy = $_HASH[ "addy" ];
+                        var url = window.location.protocol + "//" + window.location.hostname + window.location.pathname + `#regtest=true#addy=${addy}`;
+                        window.location.href = url;
+                        delete $_HASH[ "mine" ];
+                        showPage( 'loading_page' );
+                        var loop = async () => {
+                            if ( lotto_miner.bc_info ) return;
+                            await node_faker.waitSomeTime( 10 );
+                            return await loop();
+                        }
+                        await loop();
+                        var addy = $( '.btc_address' ).value;
+                        var is_valid_info = await node_faker.processCommand( `validateaddress ${addy}` );
+                        if ( !is_valid_info.isvalid ) return alert( `that address was invalid, try another` );
+                        showPage( 'status_page' );
+                        var [ coinbase, header, blockhash, target ] = await lotto_miner.makeBlock( addy );
+                        if ( !coinbase ) return;
+                        displayBlock( coinbase, header, blockhash, target, addy );
+                        showPage( 'mining_page' );
+                    })();
+                }
+                var displayBlock = ( coinbase, header, blockhash, target, addy ) => {
+                    $( '.your_block' ).innerHTML = ``;
+                    var html = `
+                        <div>
+                            <div class="block_div">
+                                <p class="bold">Block ${lotto_miner.bc_info.blocks + 1}</p>
+                                <div class="cb_tx">
+                                    <p class="bold">Coinbase tx</p>
+                                    <p class="bold">Inputs</p>
+                                    <div class="input">
+                                        <p>None - coinbase transactions have no inputs</p>
+                                    </div>
+                                    <p class="bold">Outputs</p>
+                                    <div class="output">
+                                        <p>Output 0: ${Number( coinbase.vout[ 0 ].value ).toLocaleString()} sats</p>
+                                        <p>Address: ${addy}</p>
+                                    </div>
+                                    <div class="output hidden">
+                                        <p>Output 1: 0 sats</p>
+                                        <p>Op_return: ${coinbase.vout[ 0 ].scriptPubKey[ 1 ]}</p>
+                                        <p>Note: every time you hit the Mine It button, you will modify the value of this op_return so that your blockhash changes. Hopefully, one of your blockhashes will be below the target</p>
+                                    </div>
+                                </div>
+                                <p class="bold">Other transactions</p>
+                                <p>[None]</p>
+                            </div>
+                            <div class="metadata">
+                                <p class="bold">Metadata about your block</p>
+                                <p>Your blockhash: <span class="blockhash">${blockhash}</span></p>
+                                <p>Your personal difficulty target: <span class="target">${target}</span></p>
+                                <p>Your block is under your target: <span class="under_target">loading...</span></p>
+                                <p>Number of attempts: <span class="num_of_tries">0</span></p>
+                                <p>Bitcoin's real difficulty target: <span>${lotto_miner.real_next_difficulty}</span></p>
+                                <p>Click "Mine it" to try again</p>
+                                <p><button class="mine_it">Mine it</button></p>
+                                <p><button class="raise_difficulty">Raise personal difficulty</button></p>
+                                <p><button class="lower_difficulty">Lower personal difficulty</button></p>
+                                <p><button class="reset_difficulty">Reset personal difficulty</button></p>
+                                <p><button class="match_btc_difficulty">Match bitcoin's difficulty</button></p>
+                                <p><button class="show_block hidden">Show block</button></p>
+                                <p><button class="show_block_hex">Show block (hex)</button></p>
+                                <p><button class="show_block_header_json">Show block header (json)</button></p>
+                                <p><button class="show_cb_hex">Show coinbase (hex)</button></p>
+                                <p><button class="show_cb_json">Show coinbase (json)</button></p>
+                            </div>
+                            <div class="hideable_element block_hex_div hidden">
+                                <p class="bold">Block hex</p>
+                                <div class="block_hex">${header + "01" + tapscript.Tx.encode( coinbase ).hex}</div>
+                            </div>
+                            <div class="hideable_element block_header_json_div hidden">
+                                <p class="bold">Block header json</p>
+                                <div class="block_header_json">${JSON.stringify( node_faker.parseHeader( header ), null, 4)}</div>
+                            </div>
+                            <div class="hideable_element coinbase_hex_div hidden">
+                                <p class="bold">Coinbase hex</p>
+                                <div class="coinbase_hex">${tapscript.Tx.encode( coinbase ).hex}</div>
+                            </div>
+                            <div class="hideable_element coinbase_json_div hidden">
+                                <p class="bold">Coinbase json</p>
+                                <div class="coinbase_json">${JSON.stringify( coinbase, null, 4)}</div>
+                            </div>
+                        </div>
+                    `;
+                    var div = document.createElement( "div" );
+                    div.innerHTML = html;
+                    div = div.firstElementChild;
+                    $( '.your_block' ).append( div );
+                    var header_hash = $( '.blockhash' ).innerText;
+                    var target = lotto_miner.fake_next_difficulty;
+                    var under_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${target}` );
+                    $( '.under_target' ).innerText = under_target ? "True" : "False";
+                    $( '.show_block' ).onclick = () => {
+                        $$( '.hideable_element' ).forEach( item => item.classList.add( "hidden" ) );
+                        if ( !$( '.block_div' ).classList.contains( "hidden" ) ) $( '.block_div' ).classList.add( "hidden" );
+                        else $( '.block_div' ).classList.remove( "hidden" );
+                        window.scrollBy( 0, 200 );
+                    }
+                    $( '.show_block_hex' ).onclick = () => {
+                        $$( '.hideable_element' ).forEach( item => item.classList.add( "hidden" ) );
+                        if ( !$( '.block_hex_div' ).classList.contains( "hidden" ) ) $( '.block_hex_div' ).classList.add( "hidden" );
+                        else $( '.block_hex_div' ).classList.remove( "hidden" );
+                        window.scrollBy( 0, 200 );
+                    }
+                    $( '.show_block_header_json' ).onclick = () => {
+                        $$( '.hideable_element' ).forEach( item => item.classList.add( "hidden" ) );
+                        if ( !$( '.block_header_json_div' ).classList.contains( "hidden" ) ) $( '.block_header_json_div' ).classList.add( "hidden" );
+                        else $( '.block_header_json_div' ).classList.remove( "hidden" );
+                        window.scrollBy( 0, 200 );
+                    }
+                    $( '.show_cb_json' ).onclick = () => {
+                        $$( '.hideable_element' ).forEach( item => item.classList.add( "hidden" ) );
+                        if ( !$( '.coinbase_json_div' ).classList.contains( "hidden" ) ) $( '.coinbase_json_div' ).classList.add( "hidden" );
+                        else $( '.coinbase_json_div' ).classList.remove( "hidden" );
+                        window.scrollBy( 0, 200 );
+                    }
+                    $( '.show_cb_hex' ).onclick = () => {
+                        $$( '.hideable_element' ).forEach( item => item.classList.add( "hidden" ) );
+                        if ( !$( '.coinbase_hex_div' ).classList.contains( "hidden" ) ) $( '.coinbase_hex_div' ).classList.add( "hidden" );
+                        else $( '.coinbase_hex_div' ).classList.remove( "hidden" );
+                        window.scrollBy( 0, 200 );
+                    }
+                    $( '.mine_it' ).onclick = async () => {
+                        showPage( 'status_page' );
+                        var addy = $( '.btc_address' ).value;
+                        var [ coinbase, header, blockhash, target ] = await lotto_miner.makeBlock( addy );
+                        if ( !coinbase ) return;
+                        displayBlock( coinbase, header, blockhash, target, addy );
+                        await node_faker.waitSomeTime( 1000 );
+                        showPage( 'mining_page' );
+                        window.scrollTo( 0, 0 );
+                    }
+                    $( '.raise_difficulty' ).onclick = () => {
+                        lotto_miner.match_btc = false;
+                        var difficulty = lotto_miner.fake_next_difficulty;
+                        var new_difficulty = ( ( BigInt( `0x${difficulty}` ) * BigInt( 50 ) ) / BigInt( 100 ) ).toString( 16 ).padStart( 64, "0" );
+                        lotto_miner.fake_next_difficulty = new_difficulty;
+                        var header_hash = $( '.blockhash' ).innerText;
+                        var target = lotto_miner.fake_next_difficulty;
+                        var under_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${target}` );
+                        $( '.target' ).innerText = target;
+                        $( '.under_target' ).innerText = under_target ? "True" : "False";
+                    }
+                    $( '.lower_difficulty' ).onclick = () => {
+                        lotto_miner.match_btc = false;
+                        var difficulty = lotto_miner.fake_next_difficulty;
+                        var new_difficulty = ( ( BigInt( `0x${difficulty}` ) * BigInt( 200 ) ) / BigInt( 100 ) ).toString( 16 ).padStart( 64, "0" );
+                        lotto_miner.fake_next_difficulty = new_difficulty;
+                        var header_hash = $( '.blockhash' ).innerText;
+                        var target = lotto_miner.fake_next_difficulty;
+                        var under_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${target}` );
+                        $( '.target' ).innerText = target;
+                        $( '.under_target' ).innerText = under_target ? "True" : "False";
+                    }
+                    $( '.reset_difficulty' ).onclick = () => {
+                        lotto_miner.match_btc = false;
+                        lotto_miner.fake_next_difficulty = "ffffff" + "0".repeat( 58 );
+                        var header_hash = $( '.blockhash' ).innerText;
+                        var target = lotto_miner.fake_next_difficulty;
+                        var under_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${target}` );
+                        $( '.target' ).innerText = target;
+                        $( '.under_target' ).innerText = under_target ? "True" : "False";
+                    }
+                    $( '.match_btc_difficulty' ).onclick = () => {
+                        lotto_miner.match_btc = true;
+                        lotto_miner.fake_next_difficulty = lotto_miner.real_next_difficulty;
+                        var header_hash = $( '.blockhash' ).innerText;
+                        var target = lotto_miner.fake_next_difficulty;
+                        var under_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${target}` );
+                        $( '.target' ).innerText = target;
+                        $( '.under_target' ).innerText = under_target ? "True" : "False";
+                    }
+                }
+                var mainLoop = async () => {
+                    lotto_miner.bc_info = await node_faker.processCommand( `getblockchaininfo` );
+                    lotto_miner.best_header = await node_faker.processCommand( `getblockheader ${lotto_miner.bc_info.bestblockhash} 0` );
+                    //assume the new difficulty is the same as what it was in the previous block
+                    var difficulty = node_faker.parseHeader( lotto_miner.best_header ).difficulty;
+                    //if we are entering a new epoch, calculate the new difficulty
+                    if ( lotto_miner.bc_info.blocks + 1 % 2016 === 0 ) {
+                        var prevblock_parsed_header = node_faker.parseHeader( lotto_miner.best_header );
+                        var while_back_blockhash = await node_faker.processCommand( `getblockhash ${lotto_miner.bc_info.blocks - 2016}` );
+                        var while_back_header = await node_faker.processCommand( `getblockheader ${while_back_blockhash} 0` );
+                        var while_back_parsed_header = node_faker.parseHeader( while_back_header );
+                        var difficulty = lotto_miner.calculateNextDifficulty( {time: prevblock_parsed_header.timestamp, bits: parseInt( prevblock_parsed_header.difficulty, 16 )}, {time: while_back_parsed_header.timestamp, bits: parseInt( while_back_parsed_header.difficulty, 16 )} );
+                    }
+                    lotto_miner.real_next_difficulty_short = difficulty;
+                    lotto_miner.real_next_difficulty = lotto_miner.targetToHex( parseInt( difficulty, 16 ) );
+                    $( '.blockheight' ).innerText = lotto_miner.bc_info.blocks;
+                    $( '.block_reward' ).innerText = lotto_miner.getBlockReward( lotto_miner.bc_info.blocks ).toLocaleString() + ' sats';
+                    console.log( 'blockheight:', lotto_miner.bc_info.blocks );
+                    await node_faker.waitSomeTime( 10_000 );
+                    mainLoop();
+                }
+                mainLoop();
+                var triesLoop = async () => {
+                    $$( '.num_of_tries' ).forEach( item => item.innerText = lotto_miner.num_of_tries.toLocaleString() );
+                    await node_faker.waitSomeTime( 10 );
+                    triesLoop();
+                }
+                triesLoop();
+            </script>
+        </div>
+    </body>
+</html>
