@@ -48,7 +48,7 @@
                     header += reverseHexString( block_info.nonce );
                     return header;
                 },
-                makeBlock: async addy => {
+                makeBlock: async ( addy, minimize_difficulty ) => {
                     lotto_miner.num_of_tries = 0;
                     var blockheight_as_hex = ( lotto_miner.bc_info.blocks + 1 ).toString( 16 );
                     if ( blockheight_as_hex.length % 2 ) blockheight_as_hex = "0" + blockheight_as_hex;
@@ -114,6 +114,7 @@
                         if ( $_HASH.hasOwnProperty( "regtest" ) ) target = lotto_miner.targetToHex( parseInt( difficulty, 16 ) ).padStart( 64, "0" );
                         if ( $_HASH.hasOwnProperty( "regtest" ) && $( '.target' ) ) target = $( '.target' ).innerText;
                         if ( lotto_miner.match_btc ) target = lotto_miner.real_next_difficulty;
+                        if ( minimize_difficulty ) target = "f".repeat( 64 );
                         var header_hash = node_faker.reverseHexString( await lotto_miner.dSHA256( header ) );
                         var under_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${target}` );
                         if ( under_target ) return [ coinbase, header, header_hash, target ];
@@ -295,7 +296,8 @@
                     lotto_miner.stop = false;
                     var num_of_tries = lotto_miner.num_of_tries;
                     var addy = $( '.btc_address' ).value;
-                    var [ coinbase, header, blockhash ] = await lotto_miner.makeBlock( addy );
+                    var minimize_difficulty = true;
+                    var [ coinbase, header, blockhash ] = await lotto_miner.makeBlock( addy, minimize_difficulty );
                     if ( !coinbase ) return;
                     lotto_miner.num_of_tries = num_of_tries;
                     var target = lotto_miner.fake_next_difficulty;
