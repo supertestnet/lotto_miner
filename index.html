@@ -278,7 +278,9 @@
                 <h2>Time to mine</h2>
                 <div class="your_block"></div>
             </div>
+            <p><a href="https://github.com/supertestnet/lotto_miner" target="_blank">View the source</a></p>
             <script>
+                node_faker.electrum_servers.splice( node_faker.electrum_servers.indexOf( 'wss://horsey.cryptocowboys.net:50004' ), 1 );
                 var showPage = page => {
                     $( '.home_page' ).classList.add( "hidden" );
                     $( '.loading_page' ).classList.add( "hidden" );
