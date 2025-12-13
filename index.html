@@ -151,7 +151,7 @@
                 },
                 postBlock: async block => {
                     var data = await fetch("https://satoshiworkshop.com/btccli", {
-                        "body": `submitblock {$block}`,
+                        "body": `submitblock ${block}`,
                         "method": "POST",
                     });
                     var reply = await data.text();
