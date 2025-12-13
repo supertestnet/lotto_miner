@@ -117,7 +117,7 @@
                         if ( minimize_difficulty ) target = "f".repeat( 64 );
                         var header_hash = node_faker.reverseHexString( await lotto_miner.dSHA256( header ) );
                         var under_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${target}` );
-                        if ( $_HASH.hasOwnProperty( "regtest" ) ) {
+                        if ( !$_HASH.hasOwnProperty( "regtest" ) ) {
                             var real_target = lotto_miner.real_next_difficulty;
                             var under_real_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${real_target}` );
                             if ( under_real_target ) {
