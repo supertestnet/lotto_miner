@@ -554,7 +554,10 @@
                 }
                 var mainLoop = async () => {
                     lotto_miner.bc_info = await node_faker.processCommand( `getblockchaininfo` );
-                    lotto_miner.best_header = await node_faker.processCommand( `getblockheader ${lotto_miner.bc_info.bestblockhash} 0` );
+                    var prev_header = lotto_miner.best_header;
+                    var its_hash = null;
+                    if ( prev_header ) its_hash = node_faker.reverseHexString( await lotto_miner.dSHA256( prev_header ) );
+                    if ( lotto_miner.bc_info.bestblockhash !== its_hash ) lotto_miner.best_header = await node_faker.processCommand( `getblockheader ${lotto_miner.bc_info.bestblockhash} 0` );
                     //assume the new difficulty is the same as what it was in the previous block
                     var difficulty = node_faker.parseHeader( lotto_miner.best_header ).difficulty;
                     //if we are entering a new epoch, calculate the new difficulty
