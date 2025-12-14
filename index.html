@@ -500,7 +500,8 @@
                         window.scrollBy( 0, 200 );
                     }
                     $( '.mine_it' ).onclick = async () => {
-                        lotto_miner.best_so_far = "f".repeat( 64 ),
+                        lotto_miner.best_so_far = "f".repeat( 64 );
+                        lotto_miner.starting_point = 0;
                         showPage( 'status_page' );
                         var addy = $( '.btc_address' ).value;
                         var [ coinbase, header, blockhash, target ] = await lotto_miner.makeBlock( addy );
