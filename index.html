@@ -13,7 +13,11 @@
                 real_next_difficulty_short: null,
                 real_next_difficulty: null,
                 fake_next_difficulty: "ffffff" + "0".repeat( 58 ),
+                best_so_far: "f".repeat( 64 ),
                 num_of_tries: 0,
+                hashes_per_second: 1000,
+                start: 0,
+                starting_point: 0,
                 stop: false,
                 match_btc: false,
                 dSHA256: async input => {
@@ -79,8 +83,21 @@
                         var regtest = true;
                         cb_value = lotto_miner.getBlockReward( prev_height + 1, regtest );
                     }
+                    var current_second = 0;
                     var loop = async () => {
                         if ( lotto_miner.stop ) return [ null, null, null, null ];
+                        //do not exceed the targeted hashes per second
+                        var now = Math.floor( Date.now() / 1000 );
+                        if ( Math.round( now - lotto_miner.start ) >= current_second && lotto_miner.num_of_tries >= lotto_miner.starting_point + lotto_miner.hashes_per_second ) {
+                            var waitLoop = async () => {
+                                await node_faker.waitSomeTime( 1 );
+                                var now = Math.floor( Date.now() / 1000 );
+                                if ( Math.round( now - lotto_miner.start ) < current_second + 1 ) return await waitLoop();
+                                lotto_miner.starting_point = lotto_miner.starting_point + lotto_miner.hashes_per_second;
+                                current_second = current_second + 1;
+                            }
+                            await waitLoop();
+                        }
                         lotto_miner.num_of_tries = lotto_miner.num_of_tries + 1;
                         var rand = node_faker.getRand( 32 );
                         var coinbase = tapscript.Tx.create({
@@ -117,6 +134,8 @@
                         if ( minimize_difficulty ) target = "f".repeat( 64 );
                         var header_hash = node_faker.reverseHexString( await lotto_miner.dSHA256( header ) );
                         var under_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${target}` );
+                        var new_best = BigInt( `0x${header_hash}` ) < BigInt( `0x${lotto_miner.best_so_far}` );
+                        if ( new_best ) lotto_miner.best_so_far = header_hash;
                         if ( !$_HASH.hasOwnProperty( "regtest" ) ) {
                             var real_target = lotto_miner.real_next_difficulty;
                             var under_real_target = BigInt( `0x${header_hash}` ) < BigInt( `0x${real_target}` );
@@ -130,6 +149,7 @@
                         if ( under_target ) return [ coinbase, header, header_hash, target ];
                         return await loop();
                     }
+                    lotto_miner.start = Math.floor( Date.now() / 1000 );
                     return await loop();
                 },
                 calculateNextDifficulty: ( prev, first ) => {
@@ -290,6 +310,10 @@
             <div class="status_page hidden">
                 <p>mining...</p>
                 <p>Number of attempts: <span class="num_of_tries">0</span></p>
+                <p>Targeted hashes per second (HPS): <span class="hashes_per_second">0</span></p>
+                <p>Difficulty target: <span class="difficulty_target">loading...</span></p>
+                <p>Best attempt so far: <span class="best_so_far">loading...</span></p>
+                <p><button class="raise_hps">Raise HPS</button> <button class="lower_hps">Lower HPS</button></p>
                 <p><button class="stop_btn">Stop</button></p>
             </div>
             <div class="mining_page hidden">
@@ -310,6 +334,8 @@
                     if ( !$( '.explainer' ).classList.contains( "hidden" ) ) $( '.explainer' ).classList.add( "hidden" );
                     else $( '.explainer' ).classList.remove( "hidden" );
                 });
+                $( '.raise_hps' ).onclick = () => lotto_miner.hashes_per_second = lotto_miner.hashes_per_second + 100;
+                $( '.lower_hps' ).onclick = () => lotto_miner.hashes_per_second = lotto_miner.hashes_per_second - 100;
                 $( '.stop_btn' ).onclick = async () => {
                     lotto_miner.stop = true;
                     await node_faker.waitSomeTime( 1000 );
@@ -474,6 +500,7 @@
                         window.scrollBy( 0, 200 );
                     }
                     $( '.mine_it' ).onclick = async () => {
+                        lotto_miner.best_so_far = "f".repeat( 64 ),
                         showPage( 'status_page' );
                         var addy = $( '.btc_address' ).value;
                         var [ coinbase, header, blockhash, target ] = await lotto_miner.makeBlock( addy );
@@ -548,6 +575,9 @@
                 mainLoop();
                 var triesLoop = async () => {
                     $$( '.num_of_tries' ).forEach( item => item.innerText = lotto_miner.num_of_tries.toLocaleString() );
+                    $( '.hashes_per_second' ).innerText = lotto_miner.hashes_per_second.toLocaleString();
+                    $( '.difficulty_target' ).innerText = lotto_miner.fake_next_difficulty;
+                    $( '.best_so_far' ).innerText = lotto_miner.best_so_far;
                     await node_faker.waitSomeTime( 10 );
                     triesLoop();
                 }
